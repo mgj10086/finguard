@@ -1,0 +1,15 @@
+# Milvus 配置文件覆盖
+# 参考: https://milvus.io/docs/configure-docker.md
+
+quotaAndLimits:
+  queryNode:
+    maxNumPartialIndex: 32
+  indexRate:
+    max: 2
+
+autoIndex:
+  enable: true
+  params:
+    index_type: IVF_FLAT
+    metric_type: IP
+    nlist: 1024

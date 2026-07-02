@@ -1,0 +1,250 @@
+version: "3.8"
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ===== 应用服务 =====
+  finguard-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - APP_ENV=production
+      - DATABASE_HOST=postgres
+      - REDIS_HOST=redis
+      - MILVUS_HOST=milvus-standalone
+      - NEO4J_URI=bolt://neo4j:7687
+      - MINIO_ENDPOINT=minio:9000
+      - LLM_BASE_URL=http://vllm:8001/v1
+    volumes:
+      - ./data:/app/data
+      - finguard_api_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      milvus-standalone:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full"]
+
+  finguard-frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - finguard-api
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full"]
+
+  # ===== 智能层 =====
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./docker/models:/root/.cache/huggingface
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+    command:
+      - "--model"
+      - "Qwen/Qwen2.5-7B-Instruct"
+      - "--served-model-name"
+      - "Qwen/Qwen2.5-7B-Instruct"
+      - "--gpu-memory-utilization"
+      - "0.90"
+      - "--max-model-len"
+      - "8192"
+      - "--port"
+      - "8001"
+      - "--api-key"
+      - "not-needed"
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "gpu"]
+
+  # Ollama 作为开发环境替代 vLLM
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "8001:11434"
+    volumes:
+      - ./docker/ollama:/root/.ollama
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["ollama"]
+
+  # ===== 向量数据库 =====
+  milvus-standalone:
+    image: milvusdb/milvus:latest
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+      - ./docker/milvus.yaml:/milvus/configs/milvus.yaml:ro
+    depends_on:
+      etcd:
+        condition: service_started
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "milvus"]
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://0.0.0.0:2379 -listen-client-urls=http://0.0.0.0:2379 -data-dir=/etcd
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "milvus"]
+
+  # ===== 对象存储 =====
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: finguard_minio
+      MINIO_ROOT_PASSWORD: finguard_minio_secret
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "milvus", "minio"]
+
+  # ===== 图数据库 =====
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/finguard_neo4j
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p finguard_neo4j 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "neo4j"]
+
+  # ===== 缓存/消息 =====
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --save 300 10
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "redis"]
+
+  # ===== 关系数据库 =====
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: finguard
+      POSTGRES_PASSWORD: finguard_secret
+      POSTGRES_DB: finguard
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["full", "postgres"]
+
+  # ===== 监控 =====
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["monitoring"]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=finguard_grafana
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["monitoring"]
+
+# ===== 持久卷 =====
+volumes:
+  milvus_data:
+  etcd_data:
+  minio_data:
+  neo4j_data:
+  neo4j_logs:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  finguard_api_logs:

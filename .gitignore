@@ -1,0 +1,33 @@
+# 环境
+.env
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# 数据
+data/regulations/*
+!data/regulations/.gitkeep
+data/finguard.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+docker/data/
+
+# 日志
+*.log
+logs/
+
+# 系统
+Thumbs.db
+.DS_Store
