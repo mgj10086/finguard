@@ -2,7 +2,7 @@
 name = "finguard"
 version = "0.1.0"
 description = "FinGuard - 金融合规文档智能审核系统"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -58,7 +58,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
