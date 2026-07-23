@@ -37,7 +37,7 @@ class Regulation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False, comment="法规全称")
-    short_title: Mapped[str | None] = mapped_column(String(200), nullable=True, comment("简称"))
+    short_title: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="简称")
     source: Mapped[RegulationSource] = mapped_column(
         Enum(RegulationSource, name="regulation_source"),
         nullable=False,
